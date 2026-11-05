@@ -1,0 +1,36 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Credentials and secrets
+.env
+.env.*
+!.env.example
+*.pem
+.aws/
+
+# Data files
+*.csv
+*.parquet
+*.log
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak

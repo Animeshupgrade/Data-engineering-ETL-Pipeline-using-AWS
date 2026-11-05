@@ -1,0 +1,112 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.gluetypes import *
+from awsgluedq.transforms import EvaluateDataQuality
+from awsglue import DynamicFrame
+import re
+
+def _find_null_fields(ctx, schema, path, output, nullStringSet, nullIntegerSet, frame):
+    if isinstance(schema, StructType):
+        for field in schema:
+            new_path = path + "." if path != "" else path
+            output = _find_null_fields(ctx, field.dataType, new_path + field.name, output, nullStringSet, nullIntegerSet, frame)
+    elif isinstance(schema, ArrayType):
+        if isinstance(schema.elementType, StructType):
+            output = _find_null_fields(ctx, schema.elementType, path, output, nullStringSet, nullIntegerSet, frame)
+    elif isinstance(schema, NullType):
+        output.append(path)
+    else:
+        x, distinct_set = frame.toDF(), set()
+        for i in x.select(path).distinct().collect():
+            distinct_ = i[path.split('.')[-1]]
+            if isinstance(distinct_, list):
+                distinct_set |= set([item.strip() if isinstance(item, str) else item for item in distinct_])
+            elif isinstance(distinct_, str) :
+                distinct_set.add(distinct_.strip())
+            else:
+                distinct_set.add(distinct_)
+        if isinstance(schema, StringType):
+            if distinct_set.issubset(nullStringSet):
+                output.append(path)
+        elif isinstance(schema, IntegerType) or isinstance(schema, LongType) or isinstance(schema, DoubleType):
+            if distinct_set.issubset(nullIntegerSet):
+                output.append(path)
+    return output
+
+def drop_nulls(glueContext, frame, nullStringSet, nullIntegerSet, transformation_ctx) -> DynamicFrame:
+    nullColumns = _find_null_fields(frame.glue_ctx, frame.schema(), "", [], nullStringSet, nullIntegerSet, frame)
+    return DropFields.apply(frame=frame, paths=nullColumns, transformation_ctx=transformation_ctx)
+
+def sparkSqlQuery(glueContext, query, mapping, transformation_ctx) -> DynamicFrame:
+    for alias, frame in mapping.items():
+        frame.toDF().createOrReplaceTempView(alias)
+    result = spark.sql(query)
+    return DynamicFrame.fromDF(result, glueContext, transformation_ctx)
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+# Default ruleset used by all target nodes with data quality enabled
+DEFAULT_DATA_QUALITY_RULESET = """
+    Rules = [
+        ColumnCount > 0
+    ]
+"""
+
+# Script generated for node Amazon S3
+AmazonS3_node1793602920747 = glueContext.create_dynamic_frame.from_options(format_options={}, connection_type="s3", format="parquet", connection_options={"paths": ["s3://an.09-ni/support-tickets/processed/"], "recurse": True}, transformation_ctx="AmazonS3_node1793602920747")
+
+# Script generated for node Amazon S3
+AmazonS3_node1793596420605 = glueContext.create_dynamic_frame.from_options(format_options={"quoteChar": "\"", "withHeader": True, "separator": ",", "optimizePerformance": False}, connection_type="s3", format="csv", connection_options={"paths": ["s3://an.09-ni/support-tickets/raw/"], "recurse": True}, transformation_ctx="AmazonS3_node1793596420605")
+
+# Script generated for node Change Schema
+ChangeSchema_node1793596577068 = ApplyMapping.apply(frame=AmazonS3_node1793596420605, mappings=[("ï»¿ticket_id", "string", "ï»¿ticket_id", "string"), ("created_at", "string", "created_at", "timestamp"), ("resolved_at", "string", "resolved_at", "timestamp"), ("agent", "string", "agent", "string"), ("priority", "string", "priority", "string"), ("num_interactions", "string", "num_interactions", "int"), ("issue_category", "string", "issue_category", "string"), ("channel", "string", "channel", "string"), ("status", "string", "status", "string"), ("agent_feedback", "string", "agent_feedback", "string")], transformation_ctx="ChangeSchema_node1793596577068")
+
+# Script generated for node Drop Null Fields
+DropNullFields_node1793596653693 = drop_nulls(glueContext, frame=ChangeSchema_node1793596577068, nullStringSet={""}, nullIntegerSet={}, transformation_ctx="DropNullFields_node1793596653693")
+
+# Script generated for node Rename Field
+RenameField_node1793596720188 = RenameField.apply(frame=DropNullFields_node1793596653693, old_name="agent", new_name="agent_name", transformation_ctx="RenameField_node1793596720188")
+
+# Script generated for node Filter
+Filter_node1793596775076 = Filter.apply(frame=RenameField_node1793596720188, f=lambda row: (row["num_interactions"] >= 0), transformation_ctx="Filter_node1793596775076")
+
+# Script generated for node SQL Query
+SqlQuery0 = '''
+select *,
+case
+   
+   WHEN priority = 'Lw' THEN 'LOW'
+   WHEN priority = 'Medum' THEN 'Medium'
+   WHEN priority = 'Hgh' THEN 'High'
+   
+ELSE priority
+END AS priority
+
+from myDataSource
+'''
+SQLQuery_node1793596828916 = sparkSqlQuery(glueContext, query = SqlQuery0, mapping = {"myDataSource":Filter_node1793596775076}, transformation_ctx = "SQLQuery_node1793596828916")
+
+# Script generated for node Select Fields
+SelectFields_node1793604386194 = SelectFields.apply(frame=SQLQuery_node1793596828916, paths=["ï»¿ticket_id", "created_at", "resolved_at", "num_interactions", "priority", "issue_category", "channel", "agent_name", "status"], transformation_ctx="SelectFields_node1793604386194")
+
+# Script generated for node Amazon S3
+EvaluateDataQuality().process_rows(frame=AmazonS3_node1793602920747, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1793596412585", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+if (AmazonS3_node1793602920747.count() >= 1):
+   AmazonS3_node1793602920747 = AmazonS3_node1793602920747.coalesce(1)
+AmazonS3_node1793603089619 = glueContext.write_dynamic_frame.from_options(frame=AmazonS3_node1793602920747, connection_type="s3", format="glueparquet", connection_options={"path": "s3://an.09-ni/support-tickets/processed/", "partitionKeys": []}, format_options={"compression": "snappy"}, transformation_ctx="AmazonS3_node1793603089619")
+
+# Script generated for node Amazon S3
+EvaluateDataQuality().process_rows(frame=SQLQuery_node1793596828916, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1793596412585", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+if (SQLQuery_node1793596828916.count() >= 1):
+   SQLQuery_node1793596828916 = SQLQuery_node1793596828916.coalesce(1)
+AmazonS3_node1793603354347 = glueContext.write_dynamic_frame.from_options(frame=SQLQuery_node1793596828916, connection_type="s3", format="glueparquet", connection_options={"path": "s3://an.09-ni/support-tickets/processed/", "partitionKeys": []}, format_options={"compression": "snappy"}, transformation_ctx="AmazonS3_node1793603354347")
+
+job.commit()
